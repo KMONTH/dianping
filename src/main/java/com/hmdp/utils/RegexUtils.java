@@ -37,6 +37,6 @@ public class RegexUtils {
         if (StrUtil.isBlank(str)) {
             return true;
         }
-        return !str.matches(regex);
+        return !str.matches(regex);//匹配到返回false 未匹配到返回true
     }
 }

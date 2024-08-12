@@ -15,7 +15,7 @@ import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL;
 
 public class RefreshTokenInterceptor implements HandlerInterceptor {
-
+    //这里不能自动注入是因为这个类没有注解@Component一类注解没有被容器管理
     private StringRedisTemplate stringRedisTemplate;
 
     public RefreshTokenInterceptor(StringRedisTemplate stringRedisTemplate) {
@@ -41,7 +41,7 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
         // 6.存在，保存用户信息到 ThreadLocal
         UserHolder.saveUser(userDTO);
         // 7.刷新token有效期
-        stringRedisTemplate.expire(key, LOGIN_USER_TTL, TimeUnit.MINUTES);
+        stringRedisTemplate.expire(key, LOGIN_USER_TTL, TimeUnit.SECONDS);
         // 8.放行
         return true;
     }
