@@ -13,8 +13,10 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.CAHE_SHOPTYPE_KEY;
+import static com.hmdp.utils.RedisConstants.CAHE_SHOPTYPE_TTL;
 
 /**
  * <p>
@@ -43,7 +45,7 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
             return Result.fail("无任何商品类型");
         }
         shopTypeJson = JSON.toJSONString(shopTypes);
-        stringRedisTemplate.opsForValue().set(key, shopTypeJson);
+        stringRedisTemplate.opsForValue().set(key, shopTypeJson,CAHE_SHOPTYPE_TTL, TimeUnit.MINUTES);
         return Result.ok(shopTypes);
     }
 }
