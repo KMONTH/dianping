@@ -15,8 +15,7 @@ import javax.annotation.Resource;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static com.hmdp.utils.RedisConstants.CAHE_SHOPTYPE_KEY;
-import static com.hmdp.utils.RedisConstants.CAHE_SHOPTYPE_TTL;
+import static com.hmdp.utils.RedisConstants.*;
 
 /**
  * <p>
@@ -39,9 +38,14 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
             return Result.ok(JSON.parseObject(shopTypeJson,
                     new TypeReference<List<ShopType>>(){}));
         }
+        if(shopTypeJson!=null){
+            return Result.fail("无任何商品类型");
+        }
         //2.查数据库,有保存至redis并返回,无就报错
         List<ShopType> shopTypes = query().orderByAsc("sort").list();
         if(shopTypes == null){
+            //防止缓存穿透
+            stringRedisTemplate.opsForValue().set(key,"",CACHE_NULL_TTL,TimeUnit.MINUTES);
             return Result.fail("无任何商品类型");
         }
         shopTypeJson = JSON.toJSONString(shopTypes);
