@@ -1,6 +1,5 @@
 package com.hmdp.service.impl;
 
-import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson.JSON;
@@ -9,13 +8,16 @@ import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
-import com.hmdp.utils.CacheClient;
+import com.hmdp.utils.RedisData;
+import com.hmdp.utils.RedisUtils;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import static com.hmdp.utils.RedisConstants.*;
 
@@ -32,10 +34,22 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private RedisUtils redisUtils;
 
     //根据id查询商户
     @Override
     public Result queryById(Long id) {
+        //互斥锁解决缓存击穿,此处暂未写逻辑过期方法
+        //Shop shop = queryWithMutex(id);
+        Shop shop = redisUtils.queryNew(CACHE_SHOP_KEY, id, Shop.class, this::getById);
+        if (shop == null) {
+            return Result.fail("商户不存在");
+        }
+        return Result.ok(shop);
+    }
+
+    /*public Shop queryWithMutex(Long id) {
         String key = CACHE_SHOP_KEY + id;
         String lock = LOCK_SHOP_KEY + id;
         Shop shop = null;
@@ -47,11 +61,11 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 shopJson = stringRedisTemplate.opsForValue().get(key);
                 //2.判断缓存是否存在,不存在就向数据库查询
                 if (StrUtil.isNotBlank(shopJson)) {
-                    return Result.ok(JSON.parseObject(shopJson, Shop.class));
+                    return JSON.parseObject(shopJson, Shop.class);
                 }
                 //防止缓存穿透
                 if (shopJson != null) {
-                    return Result.fail("商户不存在");
+                    return null;
                 }
                 //防止缓存击穿使用互斥锁
                 if (getLock(lock)) {
@@ -68,18 +82,18 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             if (shop == null) {
                 //防止缓存穿透,向redis保存空数据
                 stringRedisTemplate.opsForValue().set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
-                return Result.fail("商户不存在");
+                return null;
             }
             //4.存在保存至redis并返回数据
             shopJson = JSON.toJSONString(shop);
             stringRedisTemplate.opsForValue().set(key, shopJson, CACHE_SHOP_TTL, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
-        }finally {
+        } finally {
             unLock(lock);
         }
-        return Result.ok(shop);
-    }
+        return shop;
+    }*/
 
     //根据id修改商户
     @Transactional
@@ -94,7 +108,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         return Result.ok();
     }
 
-    //用于缓存击穿互斥锁的获取
+    /*//用于缓存击穿互斥锁的获取与释放
     public boolean getLock(String key) {
         Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent(key, "lock", 10, TimeUnit.MINUTES);
         return BooleanUtil.isTrue(lock);
@@ -102,5 +116,18 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     public void unLock(String key) {
         stringRedisTemplate.delete(key);
+    }
+*/
+    //用于逻辑过期数据预热
+    public void saveShop2Redis(Long id, Long expire) {
+        Shop shop = getById(id);
+        if (shop == null) {
+            System.out.println("添加数据失败");
+        }
+        RedisData redisData = new RedisData();
+        redisData.setData(shop);
+        redisData.setExpireTime(LocalDateTime.now().plusSeconds(expire));
+        stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, JSON.toJSONString(redisData));
+        System.out.println("添加成功");
     }
 }
