@@ -79,7 +79,7 @@ public class RedisUtils {
         return t;
     }
 
-    //用于缓存击穿互斥锁的获取与释放
+    //用于互斥锁的获取与释放
     public boolean getLock(String key) {
         Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent(key, "lock", 10, TimeUnit.MINUTES);
         return BooleanUtil.isTrue(lock);
