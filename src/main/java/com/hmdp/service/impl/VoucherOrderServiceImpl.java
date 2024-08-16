@@ -25,10 +25,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     VoucherOrderMapper voucherOrderMapper;
     @Autowired
     ISeckillVoucherService seckillVoucherService;
+
     //涉及两张表 添加事务
     @Transactional
     @Override
-    public Result   getSeckillVoucher(Long voucherId) {
+    public Result getSeckillVoucher(Long voucherId) {
         //1.根据id获取优惠券信息
         SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
         if (seckillVoucher == null) {
@@ -40,7 +41,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("优惠券不在时效内");
         }
         Long userId = UserHolder.getUser().getId();
-        if(query().eq("user_id",userId).one()!=null){
+        if (query().eq("user_id", userId)
+                .eq("voucher_id", voucherId).one() != null) {
             return Result.fail("你已达到购买限额");
         }
         //3.判断库存是否充足
@@ -49,11 +51,10 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("优惠券已被抢完");
         }
         //4.扣减库存
-        boolean success = seckillVoucherService.update()
-                .setSql("stock = stock - 1")
-                .eq("voucher_id", voucherId).
-                gt("stock",0).update();
-        if(success!=true){
+        boolean success = seckillVoucherService.update().setSql("stock = stock - 1")
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0).update();
+        if (success != true) {
             return Result.fail("优惠券已被抢完!");
         }
         //5.创建订单
