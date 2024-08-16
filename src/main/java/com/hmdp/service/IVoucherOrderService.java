@@ -8,4 +8,6 @@ import com.hmdp.mapper.VoucherOrderMapper;
 
 public interface IVoucherOrderService extends IService<VoucherOrder> {
     Result getSeckillVoucher(Long voucherId);
+
+    Result creatVoucherOrder(Long voucherId);
 }
