@@ -1,5 +1,6 @@
 package com.dp.utils;
 
+import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
@@ -33,7 +34,6 @@ public class RedisUtils {
 
     public <T, ID> T queryNew(String keyPre, ID id, Class<T> type, Function<ID, T> function) {
         String key = keyPre + id;
-        String lock = "lock:" + keyPre + id;
         T t = null;
         String tJson = null;
         try {
@@ -50,7 +50,7 @@ public class RedisUtils {
                     return null;
                 }
                 //防止缓存击穿使用互斥锁
-                if (getLock(lock,1000L)) {
+                if (getLock(key, 1000L)) {
                     break;
                 }
                 Thread.sleep(50);
@@ -72,18 +72,24 @@ public class RedisUtils {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            unLock(lock);
+            unLock(key);
         }
         return t;
     }
 
+    private static final String ID_PREFIX = UUID.randomUUID().toString(true) + "-";
+
     //用于互斥锁的获取与释放
-    public boolean getLock(String key,Long TTL) {
-        Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent(key, Thread.currentThread().getName(), TTL, TimeUnit.SECONDS);
+    public boolean getLock(String key, Long TTL) {
+        String threadId = ID_PREFIX + Thread.currentThread().getId();
+        Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent("lock:" + key, threadId, TTL, TimeUnit.SECONDS);
         return BooleanUtil.isTrue(lock);
     }
 
     public void unLock(String key) {
-        stringRedisTemplate.delete(key);
+        String flag = stringRedisTemplate.opsForValue().get("lock:" + key);
+        if (flag.equals(ID_PREFIX + Thread.currentThread().getId())) {
+            stringRedisTemplate.delete("lock:" + key);
+        }
     }
 }

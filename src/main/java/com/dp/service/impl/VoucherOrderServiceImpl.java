@@ -46,7 +46,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("优惠券已被抢完");
         }
         Long userId = UserHolder.getUser().getId();
-        Boolean lock = redisUtils.getLock("order",1200L);
+        String key="order:"+userId;
+        Boolean lock = redisUtils.getLock(key,1200L);
         if(!lock){
             return Result.fail("当前用户正在下单");
         }
@@ -54,7 +55,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.creatVoucherOrder(voucherId);
         } finally {
-            redisUtils.unLock("order");
+            redisUtils.unLock(key);
         }
         /*如果用this会锁住其他用户(因为this单例是同一个实例,全部被锁)
         如果不加intern()方法,每一次toString都是在堆内创建的新对象
