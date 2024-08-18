@@ -7,9 +7,10 @@ import com.dp.entity.VoucherOrder;
 import com.dp.mapper.VoucherOrderMapper;
 import com.dp.service.ISeckillVoucherService;
 import com.dp.service.IVoucherOrderService;
-import com.dp.utils.RedisUtils;
 import com.dp.utils.RedisWorker;
 import com.dp.utils.UserHolder;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -26,7 +27,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Autowired
     ISeckillVoucherService seckillVoucherService;
     @Autowired
-    RedisUtils redisUtils;
+    RedissonClient redissonClient;
 
     @Override
     public Result getSeckillVoucher(Long voucherId) {
@@ -46,16 +47,16 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("优惠券已被抢完");
         }
         Long userId = UserHolder.getUser().getId();
-        String key="order:"+userId;
-        Boolean lock = redisUtils.getLock(key,1200L);
-        if(!lock){
+        String key="lock:order:"+userId;
+        RLock lock = redissonClient.getLock(key);
+        if(!lock.tryLock()){
             return Result.fail("当前用户正在下单");
         }
         try {
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.creatVoucherOrder(voucherId);
         } finally {
-            redisUtils.unLock(key);
+            lock.unlock();
         }
         /*如果用this会锁住其他用户(因为this单例是同一个实例,全部被锁)
         如果不加intern()方法,每一次toString都是在堆内创建的新对象
