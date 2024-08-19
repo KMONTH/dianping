@@ -13,10 +13,14 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 
 @Service
 public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
@@ -28,9 +32,33 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     ISeckillVoucherService seckillVoucherService;
     @Autowired
     RedissonClient redissonClient;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+    static {
+            SECKILL_SCRIPT = new DefaultRedisScript<>();
+            SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+            SECKILL_SCRIPT.setResultType(Long.class);
+    }
 
     @Override
+    //使用lua脚本完成库存与一人一单的原子操作
     public Result getSeckillVoucher(Long voucherId) {
+        Long userId = UserHolder.getUser().getId();
+        Long result = stringRedisTemplate.execute(
+                SECKILL_SCRIPT,
+                Collections.emptyList(),
+                voucherId.toString(), userId.toString()
+        );
+        if(result!=0){
+            return result==1?Result.fail("库存不足"):Result.fail("用户无购买限额");
+        }
+        Long orderId = redisWorker.nextId("order");
+        return Result.ok(0);
+    }
+
+    /*public Result getSeckillVoucher(Long voucherId) {
         //1.根据id获取优惠券信息
         SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
         if (seckillVoucher == null) {
@@ -49,6 +77,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         Long userId = UserHolder.getUser().getId();
         String key="lock:order:"+userId;
         RLock lock = redissonClient.getLock(key);
+        //锁加在外面防止锁先释放事务后提交造成的安全问题
         if(!lock.tryLock()){
             return Result.fail("当前用户正在下单");
         }
@@ -58,15 +87,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         } finally {
             lock.unlock();
         }
-        /*如果用this会锁住其他用户(因为this单例是同一个实例,全部被锁)
+        *//*如果用this会锁住其他用户(因为this单例是同一个实例,全部被锁)
         如果不加intern()方法,每一次toString都是在堆内创建的新对象
-        需要使用intern()方法返回常量池中的地址*//*
+        需要使用intern()方法返回常量池中的地址*//**//*
         synchronized (userId.toString().intern()){
             //如果不用代理对象直接调用方法会使事务失效,因为事务是通过代理机制实现的
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.creatVoucherOrder(voucherId);
-        }*/
-    }
+        }*//*
+    }*/
 
     //设计多张表的共同修改加事务
     @Transactional
