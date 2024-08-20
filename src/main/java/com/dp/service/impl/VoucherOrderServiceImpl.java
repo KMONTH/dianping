@@ -1,5 +1,6 @@
 package com.dp.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.dp.dto.Result;
 import com.dp.entity.SeckillVoucher;
@@ -15,14 +16,18 @@ import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.PostConstruct;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 
 @Service
@@ -46,19 +51,54 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         public void run() {
             while (true) {
                 try {
-                    VoucherOrder voucherOrder = orderQueue.take();
+                    //从stream队列读消息
+                    List<MapRecord<String, Object, Object>> list = stringRedisTemplate.opsForStream().read(
+                            Consumer.from("g1", "c1"),
+                            StreamReadOptions.empty().count(1).block(Duration.ofSeconds(2)),
+                            StreamOffset.create("stream.orders", ReadOffset.lastConsumed())
+                    );
+                    if (list == null || list.isEmpty()) {
+                        continue;
+                    }
+                    MapRecord<String, Object, Object> task = list.get(0);
+                    VoucherOrder voucherOrder = BeanUtil.fillBeanWithMap(task.getValue(), new VoucherOrder(), true);
                     proxy.creatVoucherOrder(voucherOrder);
-                } catch (InterruptedException e) {
-                    log.error("处理订单异常");
+                    stringRedisTemplate.opsForStream().acknowledge("stream.orders","g1",task.getId());
+                } catch (Exception e) {
+                    handlePendingList();
                 }
             }
         }
     }
+
+    private void handlePendingList() {
+        while (true) {
+            try {
+                //从pendinglist读消息
+                List<MapRecord<String, Object, Object>> list = stringRedisTemplate.opsForStream().read(
+                        Consumer.from("g1", "c1"),
+                        StreamReadOptions.empty().count(1),
+                        StreamOffset.create("stream.orders", ReadOffset.from("0"))
+                );
+                if (list == null || list.isEmpty()) {
+                    break;
+                }
+                MapRecord<String, Object, Object> task = list.get(0);
+                VoucherOrder voucherOrder = BeanUtil.fillBeanWithMap(task.getValue(), new VoucherOrder(), true);
+                proxy.creatVoucherOrder(voucherOrder);
+                stringRedisTemplate.opsForStream().acknowledge("stream.orders", "g1", task.getId());
+            } catch (Exception e) {
+                log.error("处理订单异常123");
+            }
+        }
+    }
+
     //需要一开始就开一个独立线程来准备接收订单
     @PostConstruct
     public void init() {
         SECKILL_EX.submit(new VoucherOrderHandler());
     }
+
     //指明使用的lua脚本
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
 
@@ -73,23 +113,23 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Override
     //使用lua脚本完成库存与一人一单的原子操作
     public Result getSeckillVoucher(Long voucherId) {
+        //因为是在子线程处理,子线程直接构造proxy是拿不到主线程的bean的所以要提前拿到然后子线程使用
+        proxy = (VoucherOrderServiceImpl) AopContext.currentProxy();
         Long userId = UserHolder.getUser().getId();
+        Long orderId = redisWorker.nextId("voucherOrder");
         Long result = stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
                 Collections.emptyList(),
-                voucherId.toString(), userId.toString()
+                voucherId.toString(), userId.toString(), orderId.toString()
         );
         if (result != 0) {
             return result == 1 ? Result.fail("库存不足") : Result.fail("用户无购买限额");
         }
-        Long orderId = redisWorker.nextId("voucherOrder");
-        VoucherOrder voucherOrder = new VoucherOrder();
+        /*VoucherOrder voucherOrder = new VoucherOrder();
         voucherOrder.setId(orderId);
         voucherOrder.setUserId(userId);
         voucherOrder.setVoucherId(voucherId);
-        //因为是在子线程处理,子线程直接构造proxy是拿不到主线程的bean的所以要提前拿到然后子线程使用
-        proxy = (VoucherOrderServiceImpl) AopContext.currentProxy();
-        orderQueue.add(voucherOrder);
+        *//*orderQueue.add(voucherOrder);*/
         return Result.ok(orderId);
     }
 
