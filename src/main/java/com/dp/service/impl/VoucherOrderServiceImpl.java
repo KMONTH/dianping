@@ -9,6 +9,7 @@ import com.dp.service.ISeckillVoucherService;
 import com.dp.service.IVoucherOrderService;
 import com.dp.utils.RedisWorker;
 import com.dp.utils.UserHolder;
+import org.apache.ibatis.javassist.bytecode.analysis.Executor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
@@ -19,8 +20,10 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.concurrent.*;
 
 @Service
 public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
@@ -35,12 +38,37 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
-    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
-    static {
-            SECKILL_SCRIPT = new DefaultRedisScript<>();
-            SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
-            SECKILL_SCRIPT.setResultType(Long.class);
+    private BlockingQueue<VoucherOrder> orderQueue = new ArrayBlockingQueue<>(1024 * 1024);
+    private static final ExecutorService SECKILL_EX = Executors.newSingleThreadExecutor();
+
+    public class VoucherOrderHandler implements Runnable {
+        @Override
+        public void run() {
+            while (true) {
+                try {
+                    VoucherOrder voucherOrder = orderQueue.take();
+                    proxy.creatVoucherOrder(voucherOrder);
+                } catch (InterruptedException e) {
+                    log.error("处理订单异常");
+                }
+            }
+        }
     }
+    //需要一开始就开一个独立线程来准备接收订单
+    @PostConstruct
+    public void init() {
+        SECKILL_EX.submit(new VoucherOrderHandler());
+    }
+    //指明使用的lua脚本
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+
+    static {
+        SECKILL_SCRIPT = new DefaultRedisScript<>();
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+        SECKILL_SCRIPT.setResultType(Long.class);
+    }
+
+    private VoucherOrderServiceImpl proxy;
 
     @Override
     //使用lua脚本完成库存与一人一单的原子操作
@@ -51,11 +79,30 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 Collections.emptyList(),
                 voucherId.toString(), userId.toString()
         );
-        if(result!=0){
-            return result==1?Result.fail("库存不足"):Result.fail("用户无购买限额");
+        if (result != 0) {
+            return result == 1 ? Result.fail("库存不足") : Result.fail("用户无购买限额");
         }
-        Long orderId = redisWorker.nextId("order");
-        return Result.ok(0);
+        Long orderId = redisWorker.nextId("voucherOrder");
+        VoucherOrder voucherOrder = new VoucherOrder();
+        voucherOrder.setId(orderId);
+        voucherOrder.setUserId(userId);
+        voucherOrder.setVoucherId(voucherId);
+        //因为是在子线程处理,子线程直接构造proxy是拿不到主线程的bean的所以要提前拿到然后子线程使用
+        proxy = (VoucherOrderServiceImpl) AopContext.currentProxy();
+        orderQueue.add(voucherOrder);
+        return Result.ok(orderId);
+    }
+
+    //设计多张表的共同修改加事务
+    @Override
+    @Transactional
+    public void creatVoucherOrder(VoucherOrder voucherOrder) {
+        Long voucherId = voucherOrder.getVoucherId();
+        //扣减库存
+        seckillVoucherService.update().setSql("stock = stock - 1")
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0).update();
+        save(voucherOrder);
     }
 
     /*public Result getSeckillVoucher(Long voucherId) {
@@ -97,7 +144,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }*//*
     }*/
 
-    //设计多张表的共同修改加事务
+   /* //设计多张表的共同修改加事务
     @Transactional
     public Result creatVoucherOrder(Long voucherId) {
         //3.2判断用户是否购买限额
@@ -120,5 +167,5 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         voucherOrder.setUserId(UserHolder.getUser().getId());
         save(voucherOrder);
         return Result.ok(voucherOrder.getId());
-    }
+    }*/
 }

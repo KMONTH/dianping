@@ -6,6 +6,5 @@ import com.dp.entity.VoucherOrder;
 
 public interface IVoucherOrderService extends IService<VoucherOrder> {
     Result getSeckillVoucher(Long voucherId);
-
-    Result creatVoucherOrder(Long voucherId);
+    void creatVoucherOrder(VoucherOrder voucherOrder);
 }
