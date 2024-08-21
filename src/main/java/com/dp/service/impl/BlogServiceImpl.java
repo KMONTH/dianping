@@ -1,5 +1,6 @@
 package com.dp.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.BooleanUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -19,6 +20,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.dp.utils.RedisConstants.BLOG_LIKE_KEY;
 
@@ -45,7 +48,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         }
         UserDTO userNow = UserHolder.getUser();
         User user = userServiceImpl.getById(blog.getUserId());
-        if (stringRedisTemplate.opsForSet().isMember(BLOG_LIKE_KEY + id, userNow.getId().toString())) {
+        if (stringRedisTemplate.opsForZSet().score(BLOG_LIKE_KEY + id, userNow.getId().toString()) != null) {
             blog.setIsLike(true);
         } else {
             blog.setIsLike(false);
@@ -68,8 +71,10 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         records.forEach(blog -> {
             Long userId = blog.getUserId();
             UserDTO userNow = UserHolder.getUser();
-            Boolean success = stringRedisTemplate.opsForSet().isMember(BLOG_LIKE_KEY + blog.getId(), userNow.toString());
-            blog.setIsLike(BooleanUtil.isTrue(success));
+            if (userNow!=null) {
+                Double success = stringRedisTemplate.opsForZSet().score(BLOG_LIKE_KEY + blog.getId(), userNow.getId().toString());
+                blog.setIsLike(success != null);
+            }
             User user = userServiceImpl.getById(userId);
             blog.setName(user.getNickName());
             blog.setIcon(user.getIcon());
@@ -93,24 +98,39 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     public Result likeBlog(Long id) {
         UserDTO userNow = UserHolder.getUser();
         Long userNowId = userNow.getId();
-        Boolean like = stringRedisTemplate.opsForSet().isMember(BLOG_LIKE_KEY + id, userNowId.toString());
-        if (like == true) {
+        Double score = stringRedisTemplate.opsForZSet().score(BLOG_LIKE_KEY + id, userNowId.toString());
+        if (score != null) {
 
             //lombok根据islike开头的类给的setter方法是like
             boolean success = update().setSql("liked = liked - 1")
                     .eq("id", id)
                     .update();
-            if(success){
-                stringRedisTemplate.opsForSet().remove(BLOG_LIKE_KEY + id, userNowId.toString());
+            if (success) {
+                stringRedisTemplate.opsForZSet().remove(BLOG_LIKE_KEY + id, userNowId.toString());
             }
         } else {
             boolean success = update().setSql("liked = liked + 1")
                     .eq("id", id)
                     .update();
-            if(success){
-                stringRedisTemplate.opsForSet().add(BLOG_LIKE_KEY + id, userNowId.toString());
+            if (success) {
+                stringRedisTemplate.opsForZSet().add(BLOG_LIKE_KEY + id, userNowId.toString(), System.currentTimeMillis());
             }
         }
         return Result.ok();
+    }
+
+    @Override
+    public Result queryLikes(Long id) {
+        //这里set是LinkedHashSet所以可以保证有序
+        Set<String> top5 = stringRedisTemplate.opsForZSet().range(BLOG_LIKE_KEY + id, 0, 4);
+        if(top5==null||top5.size()==0){
+            return Result.ok();
+        }
+        List<Long> collect = top5.stream().map(s -> Long.valueOf(s)).collect(Collectors.toList());
+        //这里查询无法有序是因为条件时where in(id...),会默认按id大小排,所以想要有序得自己手写
+        List<UserDTO> users = userServiceImpl.listByIds(collect).stream().map(user ->
+                BeanUtil.copyProperties(user, UserDTO.class)
+        ).collect(Collectors.toList());
+        return Result.ok(users);
     }
 }
