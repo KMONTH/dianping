@@ -17,4 +17,6 @@ public class RedisConstants {
     public static final Long CAHE_SHOPTYPE_TTL = 30L;
 
     public static final String SECKILL_STOCK_KEY = "seckill:stock:";
+
+    public static final String BLOG_LIKE_KEY = "blog:like:";
 }
