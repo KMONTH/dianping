@@ -100,6 +100,13 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             return Result.fail("id为空");
         }
         updateById(shop);
+        //采用延迟双删策略
+        stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
         stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
         return Result.ok();
     }
