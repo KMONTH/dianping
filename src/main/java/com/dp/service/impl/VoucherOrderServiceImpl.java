@@ -1,11 +1,13 @@
 package com.dp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import com.alibaba.fastjson.JSON;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.dp.dto.Result;
 import com.dp.entity.SeckillVoucher;
 import com.dp.entity.VoucherOrder;
 import com.dp.mapper.VoucherOrderMapper;
+import com.dp.mq.MqSender;
 import com.dp.service.ISeckillVoucherService;
 import com.dp.service.IVoucherOrderService;
 import com.dp.utils.RedisWorker;
@@ -30,14 +32,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 
+
 @Service
 public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
     @Autowired
     RedisWorker redisWorker;
     @Autowired
     VoucherOrderMapper voucherOrderMapper;
-    @Autowired
-    ISeckillVoucherService seckillVoucherService;
     @Autowired
     RedissonClient redissonClient;
     @Autowired
@@ -46,6 +47,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private BlockingQueue<VoucherOrder> orderQueue = new ArrayBlockingQueue<>(1024 * 1024);
     private static final ExecutorService SECKILL_EX = Executors.newSingleThreadExecutor();
 
+/*    //额外线程执行处理数据库删减的任务
     public class VoucherOrderHandler implements Runnable {
         @Override
         public void run() {
@@ -71,6 +73,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    //执行消息出现异常的处理方法
     private void handlePendingList() {
         while (true) {
             try {
@@ -91,13 +94,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 log.error("处理订单异常123");
             }
         }
-    }
+    }*/
 
-    //需要一开始就开一个独立线程来准备接收订单
+/*    //需要一开始就开一个独立线程来准备接收订单
     @PostConstruct
     public void init() {
         SECKILL_EX.submit(new VoucherOrderHandler());
-    }
+    }*/
 
     //指明使用的lua脚本
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
@@ -108,13 +111,16 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         SECKILL_SCRIPT.setResultType(Long.class);
     }
 
-    private VoucherOrderServiceImpl proxy;
+    /*private VoucherOrderServiceImpl proxy;*/
+    @Autowired
+    private MqSender mqSender;
 
     @Override
     //使用lua脚本完成库存与一人一单的原子操作
     public Result getSeckillVoucher(Long voucherId) {
-        //因为是在子线程处理,子线程直接构造proxy是拿不到主线程的bean的所以要提前拿到然后子线程使用
-        proxy = (VoucherOrderServiceImpl) AopContext.currentProxy();
+
+        /*//因为是在子线程处理,子线程直接构造proxy是拿不到主线程的bean的所以要提前拿到然后子线程使用
+        proxy = (VoucherOrderServiceImpl) AopContext.currentProxy();*/
         Long userId = UserHolder.getUser().getId();
         Long orderId = redisWorker.nextId("voucherOrder");
         Long result = stringRedisTemplate.execute(
@@ -125,15 +131,16 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (result != 0) {
             return result == 1 ? Result.fail("库存不足") : Result.fail("用户无购买限额");
         }
-        /*VoucherOrder voucherOrder = new VoucherOrder();
+        VoucherOrder voucherOrder = new VoucherOrder();
         voucherOrder.setId(orderId);
         voucherOrder.setUserId(userId);
         voucherOrder.setVoucherId(voucherId);
-        *//*orderQueue.add(voucherOrder);*/
+        //*orderQueue.add(voucherOrder);
+        mqSender.sendSeckillMessage(JSON.toJSONString(voucherOrder));
         return Result.ok(orderId);
     }
 
-    //设计多张表的共同修改加事务
+    /*//设计多张表的共同修改加事务
     @Override
     @Transactional
     public void creatVoucherOrder(VoucherOrder voucherOrder) {
@@ -143,7 +150,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 .eq("voucher_id", voucherId)
                 .gt("stock", 0).update();
         save(voucherOrder);
-    }
+    }*/
 
     /*public Result getSeckillVoucher(Long voucherId) {
         //1.根据id获取优惠券信息

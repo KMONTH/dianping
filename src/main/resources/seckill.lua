@@ -11,6 +11,6 @@ end
 if (redis.call('sadd', orderKey, userId)==0) then
     return 2
 end
-redis.call('xadd','stream.orders','*','voucherId',voucherId,'userId',userId,'id',orderId)
+--redis.call('xadd','stream.orders','*','voucherId',voucherId,'userId',userId,'id',orderId)
 redis.call('incrby',stockKey,-1)
 return 0
