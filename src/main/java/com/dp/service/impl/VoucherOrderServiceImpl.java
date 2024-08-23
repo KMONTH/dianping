@@ -12,6 +12,7 @@ import com.dp.service.ISeckillVoucherService;
 import com.dp.service.IVoucherOrderService;
 import com.dp.utils.RedisWorker;
 import com.dp.utils.UserHolder;
+import com.google.common.util.concurrent.RateLimiter;
 import org.apache.ibatis.javassist.bytecode.analysis.Executor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -43,6 +44,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     RedissonClient redissonClient;
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+
+    private RateLimiter rateLimiter = RateLimiter.create(10);
+
 
     private BlockingQueue<VoucherOrder> orderQueue = new ArrayBlockingQueue<>(1024 * 1024);
     private static final ExecutorService SECKILL_EX = Executors.newSingleThreadExecutor();
@@ -121,16 +125,20 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
         /*//因为是在子线程处理,子线程直接构造proxy是拿不到主线程的bean的所以要提前拿到然后子线程使用
         proxy = (VoucherOrderServiceImpl) AopContext.currentProxy();*/
+        //令牌桶算法 限流
+        if (!rateLimiter.tryAcquire(1000, TimeUnit.MILLISECONDS)){
+            return Result.fail("目前网络正忙，请重试");
+        }
         Long userId = UserHolder.getUser().getId();
-        Long orderId = redisWorker.nextId("voucherOrder");
         Long result = stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
                 Collections.emptyList(),
-                voucherId.toString(), userId.toString(), orderId.toString()
+                voucherId.toString(), userId.toString()
         );
         if (result != 0) {
             return result == 1 ? Result.fail("库存不足") : Result.fail("用户无购买限额");
         }
+        Long orderId = redisWorker.nextId("voucherOrder");
         VoucherOrder voucherOrder = new VoucherOrder();
         voucherOrder.setId(orderId);
         voucherOrder.setUserId(userId);

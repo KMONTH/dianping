@@ -5,6 +5,11 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.alibaba.fastjson.JSON;
+import com.dp.bloom.BloomFilterService;
+import com.google.common.hash.BloomFilter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -18,8 +23,12 @@ import static com.dp.utils.RedisConstants.*;
 @Component
 public class RedisUtils {
 
+    private static final Logger log = LoggerFactory.getLogger(RedisUtils.class);
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    private BloomFilterService bloomFilterService;
 
     public void set(String key, Object value, Long TTL, TimeUnit timeUnit) {
         stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value), TTL, timeUnit);
@@ -33,6 +42,54 @@ public class RedisUtils {
     }
 
     public <T, ID> T queryNew(String keyPre, ID id, Class<T> type, Function<ID, T> function) {
+        String key = keyPre + id;
+        T t = null;
+        String tJson = null;
+        try {
+            // 1. 使用布隆过滤器检查ID是否可能存在
+            if (!bloomFilterService.mightContain((Long) id)) {
+                // 如果布隆过滤器判定这个ID不存在，直接返回null，避免缓存穿透
+                log.info("布隆过滤器查询不存在");
+                return null;
+            }
+            // 2. 从Redis查看缓存
+            tJson = stringRedisTemplate.opsForValue().get(key);
+            // 3. 判断缓存是否存在，不存在就向数据库查询
+            if (StrUtil.isNotBlank(tJson)) {
+                return JSON.parseObject(tJson, type);
+            }
+            // 防止缓存穿透（虽然不太可能因为布隆过滤器已经排除）
+            if (tJson != null) {
+                return null;
+            }
+            // 4. 防止缓存击穿使用互斥锁
+            while (true) {
+                if (getLock(key, 1000L)) {
+                    break;
+                }
+            }
+            // 5. 从数据库查询数据
+            t = function.apply(id);
+            // 模拟重建延时
+            // Thread.sleep(200);
+            // 6. 数据不存在，防止缓存穿透，向Redis保存空数据
+            if (t == null) {
+                this.set(key, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
+                return null;
+            }
+            // 7. 数据存在，保存至Redis并返回数据
+            tJson = JSON.toJSONString(t);
+            this.set(key, tJson, 30L, TimeUnit.MINUTES);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        } finally {
+            // 8. 释放锁
+            unLock(key);
+        }
+        return t;
+    }
+
+    /*public <T, ID> T queryNew(String keyPre, ID id, Class<T> type, Function<ID, T> function) {
         String key = keyPre + id;
         T t = null;
         String tJson = null;
@@ -75,7 +132,7 @@ public class RedisUtils {
             unLock(key);
         }
         return t;
-    }
+    }*/
 
     private static final String ID_PREFIX = UUID.randomUUID().toString(true) + "-";
 
@@ -88,7 +145,7 @@ public class RedisUtils {
 
     public void unLock(String key) {
         String flag = stringRedisTemplate.opsForValue().get("lock:" + key);
-        if (flag.equals(ID_PREFIX + Thread.currentThread().getId())) {
+        if (flag != null && flag.equals(ID_PREFIX + Thread.currentThread().getId())) {
             stringRedisTemplate.delete("lock:" + key);
         }
     }

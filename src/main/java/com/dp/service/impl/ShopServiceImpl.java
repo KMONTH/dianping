@@ -2,12 +2,14 @@ package com.dp.service.impl;
 
 import com.alibaba.fastjson.JSON;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.dp.bloom.BloomFilterService;
 import com.dp.dto.Result;
 import com.dp.entity.Shop;
 import com.dp.mapper.ShopMapper;
 import com.dp.service.IShopService;
 import com.dp.utils.RedisData;
 import com.dp.utils.RedisUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +34,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private StringRedisTemplate stringRedisTemplate;
     @Resource
     private RedisUtils redisUtils;
+    @Autowired
+    private BloomFilterService bloomFilterService;
 
     //根据id查询商户
     @Override
@@ -100,6 +104,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             return Result.fail("id为空");
         }
         updateById(shop);
+
         //采用延迟双删策略
         stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
         try {
