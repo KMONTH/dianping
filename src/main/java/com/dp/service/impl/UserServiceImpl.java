@@ -48,12 +48,38 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
             //2.如果不符合，返回错误信息
             return Result.fail("手机号格式错误");
         }
+        //  判断是否在限制条件内
+        Boolean oneLevelLimit = stringRedisTemplate.opsForSet().isMember(LIMIT_KEY + phone, "1");
+        if (oneLevelLimit != null && oneLevelLimit) {
+            // 在限制条件内，不能发送验证码
+            return Result.fail("您需要等5分钟后再请求");
+        }
+
+        // 检查过去1分钟内发送验证码的次数
+        long oneMinuteAgo = System.currentTimeMillis() - 60 * 1000;
+        long count_oneminute = stringRedisTemplate.opsForZSet().count(SENDCODE_SENDTIME_KEY + phone, oneMinuteAgo, System.currentTimeMillis());
+        if (count_oneminute >= 1) {
+            // 过去1分钟内已经发送了1次，不能再发送验证码
+            return Result.fail("距离上次发送时间不足1分钟，请1分钟后重试");
+        }
+
+        // 4. 检查发送验证码的次数
+        long fiveMinutesAgo = System.currentTimeMillis() - 5 * 60 * 1000;
+        long count_fiveminute = stringRedisTemplate.opsForZSet().count(SENDCODE_SENDTIME_KEY + phone, fiveMinutesAgo, System.currentTimeMillis());
+         if (count_fiveminute >= 3) {
+            // 过去5分钟内已经发送了3次，进入限制
+            stringRedisTemplate.opsForSet().add(LIMIT_KEY + phone, "1");
+            stringRedisTemplate.expire(LIMIT_KEY + phone, 5, TimeUnit.MINUTES);
+            return Result.fail("5分钟内已经发送了3次，接下来如需再发送请等待5分钟后重试");
+        }
         //3. 符合，生成验证码
         String code = RandomUtil.randomNumbers(6);
         //4. 保存验证码与手机号到redis
         stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
         //5. 发送验证码
         log.debug("发送短信验证码成功，验证码:{}", code);
+        // 更新发送时间和次数
+        stringRedisTemplate.opsForZSet().add(SENDCODE_SENDTIME_KEY + phone, System.currentTimeMillis() + "", System.currentTimeMillis());
         //返回ok
         return Result.ok();
     }
@@ -71,7 +97,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         }
 
         //4.一致，根据手机号查询用户
-        User user = query().eq("phone",phone).one();
+        User user = query().eq("phone", phone).one();
 
         //5. 判断用户是否存在
         if (user == null) {
@@ -81,10 +107,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
         //7.配合jwt令牌保存用户信息到redis
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
-        Map<String,Object> userMap = new HashMap<>();
-        userMap.put("id",userDTO.getId().toString());
-        userMap.put("nickName",userDTO.getNickName());
-        userMap.put("icon",userDTO.getIcon());
+        Map<String, Object> userMap = new HashMap<>();
+        userMap.put("id", userDTO.getId().toString());
+        userMap.put("nickName", userDTO.getNickName());
+        userMap.put("icon", userDTO.getIcon());
         String token = JwtUtils.generateJwt(userMap);
         stringRedisTemplate.opsForHash().putAll(LOGIN_USER_KEY + token, userMap);
         stringRedisTemplate.expire(LOGIN_USER_KEY + token, LOGIN_USER_TTL, TimeUnit.SECONDS);
